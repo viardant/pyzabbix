@@ -21,6 +21,8 @@ logger.addHandler(logging.NullHandler())
 ZABBIX_5_4_0 = Version("5.4.0")
 ZABBIX_6_4_0 = Version("6.4.0")
 
+DEFAULT_SESSION_NAME = "DEFAULT_SESSION_NAME"
+
 
 class ZabbixAPIException(Exception):
     """Generic Zabbix API exception
@@ -77,7 +79,7 @@ class ZabbixAPI:
 
         self.use_authenticate = use_authenticate
         self.use_api_token = False
-        self.auth = ""
+        self.auth = {}
         self.id = 0  # pylint: disable=invalid-name
 
         self.timeout = timeout
@@ -107,6 +109,7 @@ class ZabbixAPI:
         user: str = "",
         password: str = "",
         api_token: Optional[str] = None,
+        session_name: Optional[str] = DEFAULT_SESSION_NAME,
     ) -> None:
         """Convenience method for calling user.authenticate
         and storing the resulting auth token for further commands.
@@ -117,6 +120,7 @@ class ZabbixAPI:
         :param password: Password used to login into Zabbix
         :param user: Username used to login into Zabbix
         :param api_token: API Token to authenticate with
+        :param session_name: Name to register the login session under
         """
 
         if self._detect_version:
@@ -126,34 +130,41 @@ class ZabbixAPI:
         # If the API token is explicitly provided, use this instead.
         if api_token is not None:
             self.use_api_token = True
-            self.auth = api_token
+            # If session_name is not provided, use the last 8 chars from hash of the API token
+            if not session_name:
+                session_name = str(hash(api_token))[-8:]
+            self.auth[session_name] = api_token
             return
 
         # If we have an invalid auth token, we are not allowed to send a login
         # request. Clear it before trying.
-        self.auth = ""
+        self.auth[session_name] = ""
         if self.use_authenticate:
-            self.auth = self.user.authenticate(user=user, password=password)
+            self.auth[session_name] = self.user.authenticate(
+                user=user, password=password
+            )
         elif self.version and self.version >= ZABBIX_5_4_0:
-            self.auth = self.user.login(username=user, password=password)
+            self.auth[session_name] = self.user.login(username=user, password=password)
         else:
-            self.auth = self.user.login(user=user, password=password)
+            self.auth[session_name] = self.user.login(user=user, password=password)
 
-    def check_authentication(self):
+    def check_authentication(self, session_name: Optional[str] = DEFAULT_SESSION_NAME):
         if self.use_api_token:
             # We cannot use this call using an API Token
             return True
         # Convenience method for calling user.checkAuthentication of the current session
-        return self.user.checkAuthentication(sessionid=self.auth)
+        return self.user.checkAuthentication(sessionid=self.auth[session_name])
 
     @property
-    def is_authenticated(self) -> bool:
+    def is_authenticated(
+        self, session_name: Optional[str] = DEFAULT_SESSION_NAME
+    ) -> bool:
         if self.use_api_token:
             # We cannot use this call using an API Token
             return True
 
         try:
-            self.user.checkAuthentication(sessionid=self.auth)
+            self.user.checkAuthentication(sessionid=self.auth[session_name])
         except ZabbixAPIException:
             return False
         return True
@@ -189,6 +200,7 @@ class ZabbixAPI:
     def do_request(
         self,
         method: str,
+        session_name: Optional[str] = DEFAULT_SESSION_NAME,
         params: Optional[Union[Mapping, Sequence]] = None,
     ) -> dict:
         payload = {
@@ -206,11 +218,11 @@ class ZabbixAPI:
             "user.checkAuthentication",
             "user.login",
         }
-        if self.auth and method not in anonymous_methods:
+        if self.auth.get(session_name) and method not in anonymous_methods:
             if self.version and self.version >= ZABBIX_6_4_0:
-                headers["Authorization"] = f"Bearer {self.auth}"
+                headers["Authorization"] = f"Bearer {self.auth[session_name]}"
             else:
-                payload["auth"] = self.auth
+                payload["auth"] = self.auth[session_name]
 
         logger.debug("Sending: %s", payload)
         resp = self.session.post(
@@ -275,7 +287,11 @@ class ZabbixAPIMethod:
         if args and kwargs:
             raise TypeError("Found both args and kwargs")
 
-        return self._parent.do_request(self._method, args or kwargs)["result"]
+        # Extract session_name from kwargs if it exists, otherwise use the default
+        session_name = kwargs.pop("session_name", DEFAULT_SESSION_NAME)
+        return self._parent.do_request(self._method, session_name, args or kwargs)[
+            "result"
+        ]
 
 
 # pylint: disable=too-few-public-methods

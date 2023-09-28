@@ -2,6 +2,7 @@ import pytest
 from packaging.version import Version
 
 from pyzabbix import ZabbixAPI, ZabbixAPIException
+from pyzabbix.api import DEFAULT_SESSION_NAME
 
 
 @pytest.mark.parametrize(
@@ -52,7 +53,32 @@ def test_login(requests_mock):
     }
 
     # Check login
-    assert zapi.auth == "0424bd59b807674191e7d77572075f33"
+    assert zapi.auth[DEFAULT_SESSION_NAME] == "0424bd59b807674191e7d77572075f33"
+
+
+def test_login_with_session_name(requests_mock):
+    _zabbix_requests_mock_factory(
+        requests_mock,
+        json={
+            "jsonrpc": "2.0",
+            "result": "0424bd59b807674191e7d77572075f33",
+            "id": 0,
+        },
+    )
+
+    zapi = ZabbixAPI("http://example.com", detect_version=False)
+    zapi.login("mylogin", "mypass", session_name="mysession")
+
+    # Check request
+    assert requests_mock.last_request.json() == {
+        "jsonrpc": "2.0",
+        "method": "user.login",
+        "params": {"user": "mylogin", "password": "mypass"},
+        "id": 0,
+    }
+
+    # Check login
+    assert zapi.auth["mysession"] == "0424bd59b807674191e7d77572075f33"
 
 
 def test_login_with_context(requests_mock):
@@ -67,7 +93,7 @@ def test_login_with_context(requests_mock):
 
     with ZabbixAPI("http://example.com", detect_version=False) as zapi:
         zapi.login("mylogin", "mypass")
-        assert zapi.auth == "0424bd59b807674191e7d77572075f33"
+        assert zapi.auth[DEFAULT_SESSION_NAME] == "0424bd59b807674191e7d77572075f33"
 
 
 @pytest.mark.parametrize(
@@ -103,7 +129,7 @@ def test_login_with_version_detect(requests_mock, version):
 
     with ZabbixAPI("http://example.com") as zapi:
         zapi.login("mylogin", "mypass")
-        assert zapi.auth == "0424bd59b807674191e7d77572075f33"
+        assert zapi.auth[DEFAULT_SESSION_NAME] == "0424bd59b807674191e7d77572075f33"
 
 
 def test_attr_syntax_kwargs(requests_mock):
@@ -117,7 +143,7 @@ def test_attr_syntax_kwargs(requests_mock):
     )
 
     zapi = ZabbixAPI("http://example.com", detect_version=False)
-    zapi.auth = "some_auth_key"
+    zapi.auth[DEFAULT_SESSION_NAME] = "some_auth_key"
     result = zapi.host.get(hostids=5)
 
     # Check request
@@ -144,7 +170,7 @@ def test_attr_syntax_args(requests_mock):
     )
 
     zapi = ZabbixAPI("http://example.com", detect_version=False)
-    zapi.auth = "some_auth_key"
+    zapi.auth[DEFAULT_SESSION_NAME] = "some_auth_key"
     result = zapi.host.delete("22982", "22986")
 
     # Check request
@@ -256,7 +282,7 @@ def test_do_request(requests_mock, version):
 
     zapi = ZabbixAPI("http://example.com", detect_version=False)
     zapi.version = Version(version)
-    zapi.auth = "some_auth_key"
+    zapi.auth[DEFAULT_SESSION_NAME] = "some_auth_key"
     result = zapi["host"]["get"]()
 
     # Check response
